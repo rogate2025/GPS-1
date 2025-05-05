@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <title>GPS Alarm with Search & Auto Location</title>
+  <title>GPS Alarm with Search & Directions</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   
@@ -19,6 +19,24 @@
     @media (min-height: 800px) {
       #map { height: 600px; }
     }
+    #suggestions {
+      position: absolute;
+      z-index: 1000;
+      width: calc(100% - 8rem);
+      max-height: 200px;
+      overflow-y: auto;
+      background: white;
+      border: 1px solid #d1d5db;
+      border-radius: 0.5rem;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    .suggestion-item {
+      padding: 0.75rem;
+      cursor: pointer;
+    }
+    .suggestion-item:hover {
+      background: #f3f4f6;
+    }
   </style>
 </head>
 <body class="bg-gray-100 min-h-screen flex flex-col font-sans antialiased">
@@ -28,12 +46,14 @@
     
     <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
       <!-- Search Bar -->
-      <div class="flex flex-col sm:flex-row gap-2 mb-4">
+      <div class="relative flex flex-col sm:flex-row gap-2 mb-4">
         <input 
           type="text" 
           id="search" 
           placeholder="Search destination..." 
           class="flex-grow p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+          oninput="fetchSuggestions()"
+          onkeydown="if (event.key === 'Enter') searchPlace()"
         >
         <button 
           onclick="searchPlace()" 
@@ -41,6 +61,7 @@
         >
           Search
         </button>
+        <div id="suggestions" class="hidden"></div>
       </div>
       
       <!-- Map -->
@@ -89,7 +110,7 @@
   
   <!-- Footer -->
   <footer class="bg-gray-800 text-white text-center py-4 mt-auto">
-    <p>© 2025 GPS Alarm App. Powered by OpenStreetMap & Leaflet.</p>
+    <p>© 2025 GPS Alarm App. Powered by OpenStreetMap, OSRM & Leaflet.</p>
   </footer>
   
   <!-- Audio for Alarm -->
@@ -100,7 +121,8 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   
   <script>
-    let destLat, destLng, watchId, marker, userMarker;
+    let destLat, destLng, watchId, marker, userMarker, routeLayer, suggestionTimeout;
+    let userLat, userLng;
 
     const map = L.map('map').setView([20.5937, 78.9629], 5);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -109,13 +131,16 @@
       alert("Failed to load map tiles. Please check your internet connection.");
     });
 
-    // Auto detect user location
+    // Show user's location immediately on start
     navigator.geolocation.getCurrentPosition(position => {
       const { latitude, longitude } = position.coords;
+      userLat = latitude;
+      userLng = longitude;
       userMarker = L.marker([latitude, longitude], { title: "You" }).addTo(map);
       map.setView([latitude, longitude], 13);
+      document.getElementById('status').textContent = "Located your position.";
     }, err => {
-      document.getElementById('status').textContent = "Error accessing location.";
+      document.getElementById('status').textContent = "Error accessing location. Please allow geolocation.";
     }, {
       enableHighAccuracy: true
     });
@@ -133,6 +158,94 @@
 
       document.getElementById('lat').textContent = lat.toFixed(5);
       document.getElementById('lng').textContent = lng.toFixed(5);
+      document.getElementById('suggestions').classList.add('hidden');
+
+      // Fetch and display route
+      if (userLat && userLng) {
+        fetchRoute(userLat, userLng, destLat, destLng);
+      }
+    }
+
+    function fetchRoute(startLat, startLng, endLat, endLng) {
+      fetch(`http://router.project-osrm.org/route/v1/driving/${startLng},${startLat};${endLng},${endLat}?overview=full&geometries=geojson`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.routes && data.routes.length > 0) {
+            const route = data.routes[0].geometry.coordinates.map(coord => [coord[1], coord[0]]);
+            if (routeLayer) map.removeLayer(routeLayer);
+            routeLayer = L.polyline(route, { color: 'blue', weight: 4 }).addTo(map);
+            map.fitBounds(routeLayer.getBounds());
+          } else {
+            alert("Unable to find a route.");
+          }
+        })
+        .catch(err => {
+          alert("Route fetch failed. Please check your internet connection.");
+        });
+    }
+
+    function fetchSuggestions() {
+      const query = document.getElementById('search').value;
+      const suggestionsDiv = document.getElementById('suggestions');
+      
+      if (!query) {
+        suggestionsDiv.classList.add('hidden');
+        return;
+      }
+
+      // Debounce API calls
+      clearTimeout(suggestionTimeout);
+      suggestionTimeout = setTimeout(() => {
+        fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5`)
+          .then(res => res.json())
+          .then(data => {
+            suggestionsDiv.innerHTML = '';
+            if (data && data.length > 0) {
+              suggestionsDiv.classList.remove('hidden');
+              data.forEach(place => {
+                const div = document.createElement('div');
+                div.className = 'suggestion-item';
+                div.textContent = place.display_name;
+                div.onclick = () => {
+                  const lat = parseFloat(place.lat);
+                  const lon = parseFloat(place.lon);
+                  setDestination(lat, lon);
+                  map.setView([lat, lon], 14);
+                  document.getElementById('search').value = place.display_name;
+                };
+                suggestionsDiv.appendChild(div);
+              });
+            } else {
+              suggestionsDiv.classList.add('hidden');
+            }
+          })
+          .catch(err => {
+            suggestionsDiv.classList.add('hidden');
+          });
+      }, 300);
+    }
+
+    function searchPlace() {
+      const query = document.getElementById('search').value;
+      if (!query) return;
+
+      fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.length > 0) {
+            const place = data[0];
+            const lat = parseFloat(place.lat);
+            const lon = parseFloat(place.lon);
+            setDestination(lat, lon);
+            map.setView([lat, lon], 14);
+            document.getElementById('suggestions').classList.add('hidden');
+          } else {
+            alert("Place not found.");
+          }
+        })
+        .catch(err => {
+          alert("Search failed. Please check your internet connection.");
+        });
     }
 
     function getDistanceKm(lat1, lon1, lat2, lon2) {
@@ -170,6 +283,8 @@
 
       watchId = navigator.geolocation.watchPosition(pos => {
         const { latitude, longitude } = pos.coords;
+        userLat = latitude;
+        userLng = longitude;
 
         if (userMarker) userMarker.setLatLng([latitude, longitude]);
         const dist = getDistanceKm(latitude, longitude, destLat, destLng);
@@ -177,6 +292,9 @@
 
         status.textContent = `Current distance: ${dist.toFixed(2)} km`;
         directionDisplay.textContent = `${bearing}°`;
+
+        // Update route dynamically
+        fetchRoute(latitude, longitude, destLat, destLng);
 
         if (dist <= radius) {
           status.textContent += " 🔔 Within range!";
@@ -192,27 +310,14 @@
       });
     }
 
-    function searchPlace() {
-      const query = document.getElementById("search").value;
-      if (!query) return;
-
-      fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`)
-        .then(res => res.json())
-        .then(data => {
-          if (data && data.length > 0) {
-            const place = data[0];
-            const lat = parseFloat(place.lat);
-            const lon = parseFloat(place.lon);
-            setDestination(lat, lon);
-            map.setView([lat, lon], 14);
-          } else {
-            alert("Place not found.");
-          }
-        })
-        .catch(err => {
-          alert("Search failed. Please check your internet connection.");
-        });
-    }
+    // Hide suggestions when clicking outside
+    document.addEventListener('click', (e) => {
+      const suggestionsDiv = document.getElementById('suggestions');
+      const searchInput = document.getElementById('search');
+      if (!suggestionsDiv.contains(e.target) && !searchInput.contains(e.target)) {
+        suggestionsDiv.classList.add('hidden');
+      }
+    });
   </script>
 </body>
 </html>
