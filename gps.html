@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>GPS Alarm with Search & Auto Location</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <style>
+    #map { height: 400px; width: 100%; }
+    @media (min-height: 600px) {
+      #map { height: 500px; }
+    }
+    @media (min-height: 800px) {
+      #map { height: 600px; }
+    }
+  </style>
+</head>
+<body class="bg-gray-100 min-h-screen flex flex-col font-sans antialiased">
+
+  <div class="container mx-auto px-4 py-6 max-w-4xl flex-grow">
+    <h1 class="text-3xl font-bold text-center text-gray-800 mb-6">GPS Alarm & Navigation</h1>
+    
+    <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
+      <!-- Search Bar -->
+      <div class="flex flex-col sm:flex-row gap-2 mb-4">
+        <input 
+          type="text" 
+          id="search" 
+          placeholder="Search destination..." 
+          class="flex-grow p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+        <button 
+          onclick="searchPlace()" 
+          class="bg-blue-600 text-white px-4 py-3 rounded-lg hover:bg-blue-700 transition duration-200"
+        >
+          Search
+        </button>
+      </div>
+      
+      <!-- Map -->
+      <div id="map" class="rounded-lg shadow-inner"></div>
+      
+      <!-- Info Section -->
+      <div class="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <h3 class="text-lg font-semibold text-gray-700">Destination</h3>
+          <p class="text-gray-600">Latitude: <span id="lat">--</span></p>
+          <p class="text-gray-600">Longitude: <span id="lng">--</span></p>
+        </div>
+        <div>
+          <h3 class="text-lg font-semibold text-gray-700">Alarm Settings</h3>
+          <label class="block text-gray-600">
+            Alarm Distance (km):
+            <input 
+              type="number" 
+              id="radius" 
+              value="5" 
+              min="0.1" 
+              step="0.1" 
+              class="mt-1 w-full p-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+          </label>
+        </div>
+      </div>
+      
+      <!-- Controls -->
+      <div class="mt-6 flex flex-col sm:flex-row gap-4">
+        <button 
+          onclick="startTracking()" 
+          class="bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition duration-200"
+        >
+          Start Alarm
+        </button>
+      </div>
+      
+      <!-- Status and Direction -->
+      <div class="mt-4">
+        <p class="text-gray-700"><span class="font-semibold">Status:</span> <span id="status">Not started</span></p>
+        <p class="text-gray-700"><span class="font-semibold">Direction:</span> <span id="direction">--</span></p>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Footer -->
+  <footer class="bg-gray-800 text-white text-center py-4 mt-auto">
+    <p>© 2025 GPS Alarm App. Powered by OpenStreetMap & Leaflet.</p>
+  </footer>
+  
+  <!-- Audio for Alarm -->
+  <!-- Replace with local file (e.g., 'alarm_clock.ogg') for offline use -->
+  <audio id="alarmSound" src="https://actions.google.com/sounds/v1/alarms/alarm_clock.ogg" preload="auto"></audio>
+  
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  
+  <script>
+    let destLat, destLng, watchId, marker, userMarker;
+
+    const map = L.map('map').setView([20.5937, 78.9629], 5);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map).on('tileerror', () => {
+      alert("Failed to load map tiles. Please check your internet connection.");
+    });
+
+    // Auto detect user location
+    navigator.geolocation.getCurrentPosition(position => {
+      const { latitude, longitude } = position.coords;
+      userMarker = L.marker([latitude, longitude], { title: "You" }).addTo(map);
+      map.setView([latitude, longitude], 13);
+    }, err => {
+      document.getElementById('status').textContent = "Error accessing location.";
+    }, {
+      enableHighAccuracy: true
+    });
+
+    map.on('click', function(e) {
+      setDestination(e.latlng.lat, e.latlng.lng);
+    });
+
+    function setDestination(lat, lng) {
+      destLat = lat;
+      destLng = lng;
+
+      if (marker) marker.setLatLng([lat, lng]);
+      else marker = L.marker([lat, lng]).addTo(map);
+
+      document.getElementById('lat').textContent = lat.toFixed(5);
+      document.getElementById('lng').textContent = lng.toFixed(5);
+    }
+
+    function getDistanceKm(lat1, lon1, lat2, lon2) {
+      const R = 6371;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat / 2) ** 2 +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLon / 2) ** 2;
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    function getBearing(lat1, lon1, lat2, lon2) {
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const y = Math.sin(dLon) * Math.cos(lat2 * Math.PI / 180);
+      const x = Math.cos(lat1 * Math.PI / 180) * Math.sin(lat2 * Math.PI / 180) -
+                Math.sin(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.cos(dLon);
+      return Math.round((Math.atan2(y, x) * 180 / Math.PI + 360) % 360);
+    }
+
+    function startTracking() {
+      const radius = parseFloat(document.getElementById("radius").value);
+      const status = document.getElementById("status");
+      const directionDisplay = document.getElementById("direction");
+      const alarm = document.getElementById("alarmSound");
+
+      if (!destLat || !destLng) {
+        alert("Please select or search a destination first.");
+        return;
+      }
+
+      if (watchId) navigator.geolocation.clearWatch(watchId);
+
+      status.textContent = "Tracking started...";
+
+      watchId = navigator.geolocation.watchPosition(pos => {
+        const { latitude, longitude } = pos.coords;
+
+        if (userMarker) userMarker.setLatLng([latitude, longitude]);
+        const dist = getDistanceKm(latitude, longitude, destLat, destLng);
+        const bearing = getBearing(latitude, longitude, destLat, destLng);
+
+        status.textContent = `Current distance: ${dist.toFixed(2)} km`;
+        directionDisplay.textContent = `${bearing}°`;
+
+        if (dist <= radius) {
+          status.textContent += " 🔔 Within range!";
+          alarm.play();
+          navigator.geolocation.clearWatch(watchId);
+        }
+      }, err => {
+        status.textContent = "Error accessing location.";
+      }, {
+        enableHighAccuracy: true,
+        maximumAge: 5000,
+        timeout: 10000
+      });
+    }
+
+    function searchPlace() {
+      const query = document.getElementById("search").value;
+      if (!query) return;
+
+      fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.length > 0) {
+            const place = data[0];
+            const lat = parseFloat(place.lat);
+            const lon = parseFloat(place.lon);
+            setDestination(lat, lon);
+            map.setView([lat, lon], 14);
+          } else {
+            alert("Place not found.");
+          }
+        })
+        .catch(err => {
+          alert("Search failed. Please check your internet connection.");
+        });
+    }
+  </script>
+</body>
+</html>
